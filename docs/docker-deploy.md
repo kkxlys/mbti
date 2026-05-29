@@ -12,6 +12,18 @@ bash scripts/deploy-server.sh
 
 第一条装 Docker 和 Docker Compose 插件；第二条装 Caddy 并自动申请 HTTPS；第三条构建并启动项目。
 
+如果 Caddy 安装时遇到 `curl: (35) Recv failure: Connection reset by peer`，改用 Nginx：
+
+```bash
+bash scripts/install-nginx-debian.sh soul-major.cn
+```
+
+等 DNS 指向服务器、80/443 放行后再签 HTTPS：
+
+```bash
+sudo certbot --nginx -d soul-major.cn -d www.soul-major.cn
+```
+
 ## 我已经填好的
 
 - 域名回调：`https://soul-major.cn/api/pay/wechat/notify`
