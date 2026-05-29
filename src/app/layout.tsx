@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "星轨志愿局",
-  description: "高考后抽象人格测试与AI专业推荐"
+  description: "高考后16型人格倾向测评与志愿方向报告"
 };
 
 export const viewport: Viewport = {

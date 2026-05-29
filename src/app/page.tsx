@@ -1,23 +1,22 @@
 "use client";
 
 import Image from "next/image";
+import QRCode from "qrcode";
 import {
   ArrowLeft,
   ArrowRight,
-  Bot,
   BookOpen,
   CheckCircle2,
-  CreditCard,
-  GraduationCap,
   LineChart,
   LoaderCircle,
   LockKeyhole,
   MapPinned,
+  MoonStar,
   Radar,
-  School,
   Share2,
   ShieldCheck,
   Sparkles,
+  Star,
   Wallet
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -26,7 +25,9 @@ import questionBank from "../../data/question-bank-gaokao-absurd-48.json";
 type Step = "home" | "intro" | "quiz" | "checkout" | "generating" | "report";
 type Dimension = "EI" | "SN" | "TF" | "JP";
 type Letter = "E" | "I" | "S" | "N" | "T" | "F" | "J" | "P";
-type Gender = "neutral" | "male" | "female";
+type Gender = "male" | "female";
+type PaymentMode = "jsapi" | "native";
+type PayState = "idle" | "creating" | "waiting" | "error" | "not_configured";
 
 type Question = {
   id: string;
@@ -41,39 +42,65 @@ type Question = {
 };
 
 type ScoreForm = {
-  gender: Gender;
-  province: string;
-  track: string;
+  gender: Gender | "";
   total: string;
-  rank: string;
-  chinese: string;
-  math: string;
-  english: string;
-  electiveA: string;
-  electiveB: string;
-  electiveC: string;
-  city: string;
-  preference: string;
+};
+
+type QuestionBank = {
+  questionSets: Record<Gender, Question[]>;
 };
 
 type ScoreMap = Record<Letter, number>;
 
-const questions = questionBank.questions as Question[];
+type JsapiBridgeParams = {
+  appId: string;
+  timeStamp: string;
+  nonceStr: string;
+  package: string;
+  signType: "RSA";
+  paySign: string;
+};
+
+type NativePaymentResponse = {
+  orderId: string;
+  amountCents: number;
+  mode: "native";
+  codeUrl: string;
+};
+
+type JsapiPaymentResponse = {
+  orderId: string;
+  amountCents: number;
+  mode: "jsapi";
+  jsapiParams: JsapiBridgeParams;
+};
+
+type PaymentErrorResponse = {
+  error: string;
+  message: string;
+  missing?: string[];
+};
+
+declare global {
+  interface Window {
+    WeixinJSBridge?: {
+      invoke: (
+        method: "getBrandWCPayRequest",
+        params: JsapiBridgeParams,
+        callback: (response: { err_msg?: string }) => void
+      ) => void;
+    };
+    __WECHAT_OPENID__?: string;
+  }
+}
+
+const questionSets = (questionBank as QuestionBank).questionSets;
+const STORAGE_KEY = "fun-persona-demo";
+const STORAGE_VERSION = 4;
 
 const initialForm: ScoreForm = {
-  gender: "neutral",
-  province: "浙江",
-  track: "物理 + 化学 + 生物",
-  total: "612",
-  rank: "28500",
-  chinese: "118",
-  math: "126",
-  english: "132",
-  electiveA: "82",
-  electiveB: "78",
-  electiveC: "76",
-  city: "杭州 / 上海 / 南京",
-  preference: "AI科技、数字媒体、稳定就业"
+  gender: "",
+  total: ""
 };
 
 const personaData: Record<
@@ -85,83 +112,83 @@ const personaData: Record<
   }
 > = {
   ENFP: {
-    title: "志愿宇宙冒险家",
-    quote: "脑洞负责点火，行动负责把地图跑亮。",
-    vibe: "灵感跃迁 / 开放探索"
+    title: "探索型创意规划者",
+    quote: "你适合在多种可能中寻找热情，再把想法落到行动上。",
+    vibe: "开放探索 / 创意表达"
   },
   ENFJ: {
-    title: "校园主线召集人",
-    quote: "你很擅长把人的期待，整理成一条能一起走的路。",
-    vibe: "共情组织 / 氛围发动"
+    title: "共情型组织者",
+    quote: "你擅长理解他人，也能把共同目标推进成清晰计划。",
+    vibe: "共情协调 / 团队推进"
   },
   ENTJ: {
-    title: "专业战略指挥官",
-    quote: "目标不是写在纸上的，是拿来拆解、推进和验收的。",
+    title: "目标型规划者",
+    quote: "你更习惯先看目标，再拆步骤、排优先级、推动结果。",
     vibe: "目标驱动 / 战略规划"
   },
   ENTP: {
-    title: "脑洞开荒辩论王",
-    quote: "别人看到专业名，你已经开始改写它的未来版本。",
-    vibe: "创新试探 / 反套路思考"
+    title: "创新型问题解决者",
+    quote: "你喜欢从不同角度看问题，也愿意尝试新的解法。",
+    vibe: "创新试探 / 逻辑表达"
   },
   ESFP: {
-    title: "高能社交体验官",
-    quote: "你适合在真实现场获得反馈，越体验越知道自己要什么。",
+    title: "体验型行动者",
+    quote: "你适合在真实场景中获得反馈，越体验越清楚方向。",
     vibe: "现场感知 / 活力表达"
   },
   ESFJ: {
-    title: "同频氛围守护者",
-    quote: "你不是只会照顾别人，你也会把秩序变得有人情味。",
+    title: "支持型协调者",
+    quote: "你重视稳定关系，也能把规则和照顾感结合起来。",
     vibe: "关系协调 / 稳定支持"
   },
   ESTJ: {
-    title: "计划表终结者",
-    quote: "当别人还在许愿，你已经把步骤排进日历。",
+    title: "执行型管理者",
+    quote: "你擅长把目标变成步骤，并持续推进到可见结果。",
     vibe: "规则执行 / 高效推进"
   },
   ESTP: {
-    title: "现实副本速通者",
-    quote: "你更相信现场信息，边跑边修正才是你的主场。",
+    title: "实战型探索者",
+    quote: "你更相信现场信息，能在变化中快速判断和调整。",
     vibe: "即时判断 / 实战解决"
   },
   INFP: {
-    title: "精神宇宙写诗人",
-    quote: "你需要的不只是专业名字，而是能安放意义感的方向。",
+    title: "价值型探索者",
+    quote: "你需要的不只是标准答案，也需要看见选择背后的意义。",
     vibe: "价值感知 / 内在叙事"
   },
   INFJ: {
-    title: "未来航线预言家",
-    quote: "你会从细节里看见远方，也会为远方保留温柔。",
-    vibe: "洞察长期 / 深度共情"
+    title: "洞察型规划者",
+    quote: "你会从细节里看见长期趋势，也重视选择对人的影响。",
+    vibe: "长期洞察 / 深度共情"
   },
   INTJ: {
-    title: "长期主义建模师",
-    quote: "你不迷信热门，你更关心系统十年后还能不能成立。",
-    vibe: "系统建模 / 长线布局"
+    title: "长线型策略者",
+    quote: "你不轻易追热门，更关心一条路线能否长期成立。",
+    vibe: "长线布局 / 反套路规划"
   },
   INTP: {
-    title: "知识迷宫拆解员",
-    quote: "越复杂的问题越像邀请函，你会忍不住把它拆开看看。",
+    title: "分析型研究者",
+    quote: "越复杂的问题越能激发你的好奇心，你习惯先拆清逻辑。",
     vibe: "逻辑探索 / 概念拆解"
   },
   ISFP: {
-    title: "灵感生活收藏家",
-    quote: "你对喜欢和不喜欢很敏锐，适合从作品和体验里找答案。",
+    title: "审美型实践者",
+    quote: "你对喜欢和不喜欢很敏锐，适合从作品和体验里找方向。",
     vibe: "审美直觉 / 温和创作"
   },
   ISFJ: {
-    title: "稳态成长守护者",
-    quote: "你不是保守，你是在认真确认哪条路能长久地照顾自己。",
+    title: "稳健型支持者",
+    quote: "你会认真确认哪条路更稳定，也更愿意长期投入。",
     vibe: "细致守护 / 稳定成长"
   },
   ISTJ: {
-    title: "细节秩序工程师",
+    title: "细节型执行者",
     quote: "你能把复杂选择拆成证据、规则和可执行清单。",
-    vibe: "事实校准 / 秩序管理"
+    vibe: "事实雷达 / 秩序管理"
   },
   ISTP: {
-    title: "动手解法猎人",
-    quote: "你不爱空谈，但很会在真实问题里找到能跑的解法。",
+    title: "技术型解决者",
+    quote: "你不爱空谈，更擅长在真实问题里找到可行解法。",
     vibe: "动手验证 / 冷静排障"
   }
 };
@@ -190,92 +217,90 @@ const personaOrder = [
 ];
 
 const genderOptions: { value: Gender; label: string; hint: string }[] = [
-  { value: "neutral", label: "不限定", hint: "使用默认角色" },
-  { value: "male", label: "男生", hint: "展示男版角色" },
-  { value: "female", label: "女生", hint: "展示女版角色" }
+  { value: "male", label: "男生", hint: "对应题库" },
+  { value: "female", label: "女生", hint: "对应题库" }
 ];
 
 const genderLabels: Record<Gender, string> = {
-  neutral: "不限定",
-  male: "男生",
-  female: "女生"
+  male: "男",
+  female: "女"
 };
 
 function personaImage(type: string, gender: Gender) {
-  const folder = gender === "male" ? "personas-male" : gender === "female" ? "personas-female" : "personas-v3";
+  const folder = gender === "male" ? "personas-male" : "personas-female";
   return `/images/${folder}/${type.toLowerCase()}.png`;
 }
 
-const majors = [
+const directionIdeas = [
   {
-    name: "人工智能",
+    name: "产品与用户研究",
     fit: 92,
-    tags: ["N", "T", "数学"],
-    why: "适合喜欢拆问题、做模型、把脑洞落到系统里的同学。",
-    risk: "数学、编程和英文资料阅读压力较高。"
+    tags: ["需求分析", "沟通", "体验"],
+    why: "适合把人的需求拆成问题和方案，兼顾表达、判断与推进。",
+    risk: "需要补足数据分析和长期项目经验。"
   },
   {
-    name: "数据科学与大数据技术",
+    name: "数字媒体与内容策划",
     fit: 89,
-    tags: ["S", "T", "就业"],
-    why: "把分数、趋势、规律变成判断依据，和志愿分析脑回路很搭。",
-    risk: "需要长期练习统计、数据库和工程能力。"
+    tags: ["表达", "创意", "传播"],
+    why: "适合把想法转化为内容、活动或视觉表达，重视受众反馈。",
+    risk: "需要提前确认课程是否偏创作、运营或技术制作。"
   },
   {
-    name: "数字媒体技术",
+    name: "心理学与教育支持",
     fit: 88,
-    tags: ["N", "F", "创作"],
-    why: "兼顾创意表达和技术实现，适合喜欢二次元、交互和内容产品的人。",
-    risk: "不同学校培养方向差异大，要看课程表。"
+    tags: ["理解", "陪伴", "成长"],
+    why: "适合关注人的状态、动机与成长路径，重视长期影响。",
+    risk: "需要了解深造要求、就业路径和证书门槛。"
   },
   {
-    name: "计算机科学与技术",
+    name: "数据分析与商业决策",
     fit: 86,
-    tags: ["T", "J", "通用"],
-    why: "基础扎实、迁移面广，是后续转AI、产品、研发的主线入口。",
-    risk: "竞争强，需要持续自学，不能只靠上课。"
+    tags: ["逻辑", "建模", "决策"],
+    why: "适合用数据和结构化方法处理复杂问题，形成可执行判断。",
+    risk: "需要确认自己是否愿意长期学习数学、统计和工具软件。"
   },
   {
-    name: "软件工程",
+    name: "公共管理与社会服务",
     fit: 84,
-    tags: ["T", "P", "项目"],
-    why: "适合喜欢把想法做成可运行产品的人，反馈感明确。",
-    risk: "项目节奏快，容易被deadline追着跑。"
+    tags: ["组织", "规则", "协调"],
+    why: "适合在制度、资源和人群需求之间做协调，追求稳定价值。",
+    risk: "需要关注目标院校的实践资源和未来岗位方向。"
   },
   {
-    name: "信息管理与信息系统",
+    name: "计算机应用与产品技术",
     fit: 82,
-    tags: ["S", "T", "管理"],
-    why: "在技术、业务和数据之间搭桥，适合不想只写代码的同学。",
-    risk: "学校差异较大，需确认是否偏管理或偏技术。"
+    tags: ["技术", "实践", "问题解决"],
+    why: "适合把需求转化为工具或系统，在实践中不断优化方案。",
+    risk: "需要评估编程兴趣、数学基础和持续自学能力。"
   },
   {
-    name: "应用心理学",
+    name: "设计与视觉传播",
     fit: 80,
-    tags: ["F", "N", "人"],
-    why: "适合对人、行为和决策很敏感，也愿意做长期观察的人。",
-    risk: "本科就业路径需要提前规划，读研概率较高。"
+    tags: ["审美", "表达", "作品集"],
+    why: "适合把观察和感受转化为视觉方案，用作品表达判断。",
+    risk: "需要提前了解美术基础、作品集要求和专业分流。"
   },
   {
-    name: "网络与新媒体",
+    name: "外语传播与跨文化交流",
     fit: 79,
-    tags: ["E", "N", "表达"],
-    why: "能把表达欲、热点感和数据判断结合起来。",
-    risk: "行业变化快，需要作品集和实习经历支撑。"
+    tags: ["语言", "沟通", "国际视野"],
+    why: "适合在语言、文化和信息传递之间建立连接，拓展表达边界。",
+    risk: "需要结合小语种热度、地区资源和复合专业能力判断。"
   },
   {
-    name: "自动化",
+    name: "财经管理与运营",
     fit: 77,
-    tags: ["S", "T", "工程"],
-    why: "适合喜欢系统控制、硬件联动和工程落地的人。",
-    risk: "课程硬核，物理和数学基础要跟上。"
+    tags: ["规则", "执行", "资源配置"],
+    why: "适合处理预算、流程和运营效率，把目标落到具体指标上。",
+    risk: "需要关注学校层次、实习机会和行业证书规划。"
   },
   {
-    name: "法学",
+    name: "生命健康与服务管理",
     fit: 75,
-    tags: ["J", "T", "表达"],
-    why: "规则意识、表达能力和逻辑链条都能派上用场。",
-    risk: "就业门槛和考试压力较高，需要强自律。"
+    tags: ["责任", "服务", "稳定"],
+    why: "适合关注个体状态和长期服务质量，强调耐心与规范意识。",
+    risk: "需要提前确认培养年限、实习强度和职业准入要求。"
   }
 ];
 
@@ -283,7 +308,7 @@ function emptyScores(): ScoreMap {
   return { E: 0, I: 0, S: 0, N: 0, T: 0, F: 0, J: 0, P: 0 };
 }
 
-function calculateScores(answers: Record<string, string>): ScoreMap {
+function calculateScores(answers: Record<string, string>, questions: Question[]): ScoreMap {
   const scores = emptyScores();
   questions.forEach((question) => {
     const option = question.options.find((item) => item.id === answers[question.id]);
@@ -315,20 +340,80 @@ function numberValue(value: string) {
   return Number(value.replace(/[^\d.]/g, "")) || 0;
 }
 
+function safeGender(value: unknown): Gender | "" {
+  return value === "male" || value === "female" ? value : "";
+}
+
+function isWechatBrowser() {
+  if (typeof navigator === "undefined") return false;
+  return /MicroMessenger/i.test(navigator.userAgent);
+}
+
+function isMobileBrowser() {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+function resolvePaymentMode(): PaymentMode {
+  return isMobileBrowser() ? "jsapi" : "native";
+}
+
+function getWechatOpenid() {
+  if (typeof window === "undefined") return "";
+  const params = new URLSearchParams(window.location.search);
+  const queryOpenid = params.get("openid")?.trim();
+  if (queryOpenid) {
+    window.sessionStorage.setItem("wechat_openid", queryOpenid);
+    return queryOpenid;
+  }
+
+  const injectedOpenid = window.__WECHAT_OPENID__?.trim();
+  if (injectedOpenid) return injectedOpenid;
+
+  return window.sessionStorage.getItem("wechat_openid")?.trim() ?? "";
+}
+
+function invokeWechatPay(params: JsapiBridgeParams) {
+  return new Promise<void>((resolve, reject) => {
+    const run = () => {
+      window.WeixinJSBridge?.invoke("getBrandWCPayRequest", params, (response) => {
+        const message = response.err_msg ?? "";
+        if (message.includes(":ok")) {
+          resolve();
+          return;
+        }
+        if (message.includes(":cancel")) {
+          reject(new Error("已取消支付"));
+          return;
+        }
+        reject(new Error("微信支付未完成，请稍后重试"));
+      });
+    };
+
+    if (window.WeixinJSBridge) {
+      run();
+      return;
+    }
+
+    document.addEventListener("WeixinJSBridgeReady", run, { once: true });
+    window.setTimeout(() => reject(new Error("微信支付组件未就绪，请在微信内重新打开")), 8000);
+  });
+}
+
 function AppHeader({ step, onHome }: { step: Step; onHome: () => void }) {
   return (
     <header className="site-header">
       <button className="brand-button" onClick={onHome} aria-label="返回首页">
         <span className="brand-mark">
-          <Sparkles size={18} />
+          <MoonStar size={18} />
         </span>
         <span>
           <strong>星轨志愿局</strong>
-          <small>Gaokao Major Lab</small>
+          <small>高考志愿人格报告</small>
         </span>
       </button>
       <nav aria-label="主导航">
-        <span className={step === "quiz" ? "nav-pill active" : "nav-pill"}>测试</span>
+        <span className={step === "quiz" ? "nav-pill active" : "nav-pill"}>测评</span>
         <span className={step === "checkout" ? "nav-pill active" : "nav-pill"}>解锁</span>
         <span className={step === "report" ? "nav-pill active" : "nav-pill"}>报告</span>
       </nav>
@@ -345,112 +430,141 @@ function ScoreInput({
   setForm: (value: ScoreForm) => void;
   onStart: () => void;
 }) {
-  const fields: { key: keyof ScoreForm; label: string; type?: string }[] = [
-    { key: "province", label: "省份" },
-    { key: "track", label: "选科组合" },
-    { key: "total", label: "总分", type: "number" },
-    { key: "rank", label: "位次", type: "number" },
-    { key: "chinese", label: "语文", type: "number" },
-    { key: "math", label: "数学", type: "number" },
-    { key: "english", label: "外语", type: "number" },
-    { key: "electiveA", label: "选考一", type: "number" },
-    { key: "electiveB", label: "选考二", type: "number" },
-    { key: "electiveC", label: "选考三", type: "number" },
-    { key: "city", label: "目标城市" },
-    { key: "preference", label: "兴趣关键词" }
-  ];
+  const canStart = numberValue(form.total) > 0 && form.gender !== "";
 
   return (
     <section className="score-panel" aria-labelledby="score-title">
-      <div className="section-kicker">
-        <GraduationCap size={16} />
-        高考副本结算台
+      <div className="mystic-orbit" aria-hidden="true">
+        <span />
+        <span />
+        <span />
       </div>
-      <h1 id="score-title">测一测你的高考后人格航线</h1>
-      <p className="lead">
-        输入成绩和偏好，再完成48道抽象题。支付后生成完整 AI 专业建议。
-      </p>
-      <div className="gender-picker" role="radiogroup" aria-label="角色性别">
-        <span>角色性别</span>
-        <div>
-          {genderOptions.map((option) => (
-            <button
-              aria-checked={form.gender === option.value}
-              className={form.gender === option.value ? "gender-option active" : "gender-option"}
-              key={option.value}
-              onClick={() => setForm({ ...form, gender: option.value })}
-              role="radio"
-              type="button"
-            >
-              <strong>{option.label}</strong>
-              <small>{option.hint}</small>
-            </button>
-          ))}
+      <div className="score-copy">
+        <div className="section-kicker">
+          <MoonStar size={16} />
+          高考后专属 · 约5分钟
+        </div>
+        <h1 id="score-title" className="hero-title">测一测你的志愿人格倾向</h1>
+        <p className="lead">
+          输入高考总分，完成情境题，生成性格与专业方向报告。
+        </p>
+        <div className="value-strip" aria-label="报告亮点">
+          <span>人格画像</span>
+          <span>专业方向</span>
+          <span>行动建议</span>
+        </div>
+        <div className="offer-card" aria-label="完整报告权益">
+          <div>
+            <span>完整报告</span>
+            <strong>人格解读 · 专业方向 · 志愿提醒</strong>
+          </div>
+          <em>¥9.90</em>
         </div>
       </div>
-      <div className="score-grid">
-        {fields.map((field) => (
-          <label className={field.key === "preference" || field.key === "city" ? "field wide" : "field"} key={field.key}>
-            <span>{field.label}</span>
+      <div className="score-form-stack">
+        <div className="score-grid">
+          <label className="field total-field">
+            <span>高考总分</span>
             <input
-              inputMode={field.type === "number" ? "numeric" : "text"}
-              type={field.type ?? "text"}
-              value={form[field.key]}
-              onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}
+              aria-describedby="total-score-help"
+              aria-label="高考总分"
+              inputMode="numeric"
+              min="0"
+              placeholder="例如 568"
+              type="number"
+              value={form.total}
+              onChange={(event) => setForm({ ...form, total: event.target.value })}
             />
+            <small id="total-score-help">按本省成绩填写，报告参考用。</small>
           </label>
-        ))}
+        </div>
+        <div className="gender-picker" role="radiogroup" aria-label="选择性别">
+          <span>选择性别</span>
+          <div>
+            {genderOptions.map((option) => (
+              <button
+                aria-checked={form.gender === option.value}
+                className={form.gender === option.value ? "gender-option active" : "gender-option"}
+                key={option.value}
+                onClick={() => setForm({ ...form, gender: option.value })}
+                role="radio"
+                type="button"
+              >
+                <strong>{option.label}</strong>
+                <small>{option.hint}</small>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="home-actions">
-        <button className="primary-button" onClick={onStart}>
-          开始人格校准
+      <div className={canStart ? "home-actions ready" : "home-actions"}>
+        <button className="primary-button" disabled={!canStart} onClick={onStart}>
+          开始测评
           <ArrowRight size={18} />
         </button>
         <span className="safe-note">
           <ShieldCheck size={16} />
-          娱乐参考，不替代正式志愿咨询
+          支付前可查看结果预览，仅作志愿参考
         </span>
+        <div className="mobile-report-preview" aria-label="完整报告预览">
+          <span>完整报告包含</span>
+          <strong>48题画像 · 16型倾向 · 专业方向建议</strong>
+        </div>
       </div>
     </section>
   );
 }
 
 function AttributePanel({ form }: { form: ScoreForm }) {
-  const subjectData = [
-    ["语文", numberValue(form.chinese), 150],
-    ["数学", numberValue(form.math), 150],
-    ["外语", numberValue(form.english), 150],
-    ["选考一", numberValue(form.electiveA), 100],
-    ["选考二", numberValue(form.electiveB), 100],
-    ["选考三", numberValue(form.electiveC), 100]
-  ] as const;
+  const total = numberValue(form.total);
+  const totalPercent = total ? Math.min(100, Math.round((total / 750) * 100)) : 0;
 
   return (
     <aside className="attribute-panel">
       <div className="hero-visual">
         <Image
           src="/images/hero-campus.png"
-          alt="明亮赛博校园与志愿终端插画"
+          alt="高考志愿测评插画"
           width={900}
           height={700}
           priority
         />
+        <div className="hero-visual-badge">
+          <span>测评准备就绪</span>
+          <strong>48 题生成志愿人格报告</strong>
+        </div>
       </div>
       <div className="stat-card">
         <div className="stat-card-header">
-          <span>学科属性面板</span>
+          <span>高考总分</span>
           <strong>{form.total || "--"} 分</strong>
         </div>
-        <div className="subject-bars">
-          {subjectData.map(([label, value, max]) => (
-            <div className="subject-row" key={label}>
-              <span>{label}</span>
-              <div className="bar-track">
-                <i style={{ width: `${Math.min(100, (value / max) * 100)}%` }} />
-              </div>
-              <strong>{value || "--"}</strong>
-            </div>
-          ))}
+        <div className="total-score-meter" aria-label="高考总分参考比例">
+          <div className="bar-track">
+            <i style={{ width: `${totalPercent}%` }} />
+          </div>
+          <div>
+            <span>按常见 750 分制估算</span>
+            <strong>{totalPercent || "--"}%</strong>
+          </div>
+        </div>
+        <div className="score-facts">
+          <span>
+            <strong>1</strong>
+            个分数
+          </span>
+          <span>
+            <strong>{form.gender ? genderLabels[form.gender] : "--"}</strong>
+            性别
+          </span>
+          <span>
+            <strong>48</strong>
+            道情境题
+          </span>
+        </div>
+        <div className="premium-preview">
+          <span>完整报告包含</span>
+          <strong>人格画像 · 专业方向 · 志愿行动建议</strong>
         </div>
       </div>
     </aside>
@@ -462,12 +576,12 @@ function IntroStep({ onBack, onStart }: { onBack: () => void; onStart: () => voi
     <main className="intro-layout page-enter">
       <section className="intro-card">
         <div className="section-kicker">
-          <Bot size={16} />
-          志愿系统已启动
+          <MoonStar size={16} />
+          测评说明 · 约5-7分钟
         </div>
-        <h1>高考后精神状态测试</h1>
+        <h1>开始 48 道情境题</h1>
         <p>
-          高考副本已通关，志愿系统正在读取你的隐藏人格参数。接下来是48道抽象题，没有标准答案，按第一反应选就好。
+          请按第一反应选择。题目用于识别偏好，不作为正式心理测评结论。
         </p>
         <div className="intro-stats">
           <span>
@@ -480,16 +594,16 @@ function IntroStep({ onBack, onStart }: { onBack: () => void; onStart: () => voi
           </span>
           <span>
             <strong>4</strong>
-            维度
+            项倾向
           </span>
         </div>
         <div className="home-actions">
           <button className="ghost-button" onClick={onBack}>
             <ArrowLeft size={18} />
-            返回修改成绩
+            返回修改信息
           </button>
           <button className="primary-button" onClick={onStart}>
-            进入测试
+            开始测评
             <ArrowRight size={18} />
           </button>
         </div>
@@ -506,12 +620,14 @@ function IntroStep({ onBack, onStart }: { onBack: () => void; onStart: () => voi
 }
 
 function QuizStep({
+  questions,
   answers,
   currentIndex,
   setCurrentIndex,
   onAnswer,
   onFinish
 }: {
+  questions: Question[];
   answers: Record<string, string>;
   currentIndex: number;
   setCurrentIndex: (value: number) => void;
@@ -519,21 +635,24 @@ function QuizStep({
   onFinish: () => void;
 }) {
   const question = questions[currentIndex];
-  const answeredCount = Object.keys(answers).length;
+  const answeredCount = questions.filter((item) => Boolean(answers[item.id])).length;
   const progress = Math.round((answeredCount / questions.length) * 100);
   const canFinish = answeredCount === questions.length;
+  const currentAnswered = Boolean(answers[question.id]);
+  const firstMissingIndex = questions.findIndex((item) => !answers[item.id]);
+  const missingCount = questions.length - answeredCount;
 
   return (
     <main className="quiz-shell page-enter">
       <section className="quiz-card">
         <div className="quiz-topline">
           <span>第 {currentIndex + 1} / {questions.length} 题</span>
-          <span>{progress}% 校准</span>
+          <span>{progress}% 完成</span>
         </div>
         <div className="progress-track" aria-label="答题进度">
           <i style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }} />
         </div>
-        <p className="quiz-tag">{question.tags.join(" / ")}</p>
+        <p className="quiz-tag"><Star size={14} /> 情境题 · 按第一反应选择</p>
         <h1>{question.prompt}</h1>
         <div className="option-list">
           {question.options.map((option) => {
@@ -563,14 +682,24 @@ function QuizStep({
           {currentIndex < questions.length - 1 ? (
             <button
               className="primary-button"
+              disabled={!currentAnswered}
               onClick={() => setCurrentIndex(Math.min(questions.length - 1, currentIndex + 1))}
             >
               下一题
               <ArrowRight size={18} />
             </button>
           ) : (
-            <button className="primary-button" disabled={!canFinish} onClick={onFinish}>
-              查看报告预览
+            <button
+              className="primary-button"
+              onClick={() => {
+                if (canFinish) {
+                  onFinish();
+                  return;
+                }
+                setCurrentIndex(Math.max(0, firstMissingIndex));
+              }}
+            >
+              {canFinish ? "查看报告预览" : `还有 ${missingCount} 题未答`}
               <ArrowRight size={18} />
             </button>
           )}
@@ -579,9 +708,9 @@ function QuizStep({
       <aside className="quiz-side">
         <Image src="/images/quiz-mascot.png" alt="AI向导插画" width={520} height={520} />
         <div className="signal-card">
-          <span>人格信号</span>
-          <strong>{answeredCount >= 8 ? "稳定读取中" : "正在预热"}</strong>
-          <p>{answeredCount >= 32 ? "专业推荐模块已准备上线。" : "每8题会让系统多解锁一层人格参数。"}</p>
+          <span>测评进度</span>
+          <strong>{answeredCount >= 8 ? "人格倾向正在成型" : "已开始记录选择偏好"}</strong>
+          <p>{answeredCount >= 32 ? "完成后可查看报告预览。" : "保持第一反应即可，不需要反复推敲。"}</p>
         </div>
       </aside>
     </main>
@@ -589,59 +718,184 @@ function QuizStep({
 }
 
 function CheckoutStep({
+  form,
   scores,
   onBack,
-  onPay
+  onPaid
 }: {
+  form: ScoreForm;
   scores: ScoreMap;
   onBack: () => void;
-  onPay: () => void;
+  onPaid: () => void;
 }) {
   const type = resultType(scores);
+  const [payMode, setPayMode] = useState<PaymentMode>("native");
+  const [payState, setPayState] = useState<PayState>("idle");
+  const [payMessage, setPayMessage] = useState("");
+  const [orderId, setOrderId] = useState("");
+  const [nativeQr, setNativeQr] = useState("");
+
+  useEffect(() => {
+    setPayMode(resolvePaymentMode());
+  }, []);
+
+  useEffect(() => {
+    if (payState !== "waiting" || !orderId) return;
+
+    let stopped = false;
+    async function checkStatus() {
+      try {
+        const response = await fetch(`/api/pay/wechat/status?orderId=${encodeURIComponent(orderId)}`, {
+          cache: "no-store"
+        });
+        const payload = (await response.json()) as { status?: string; message?: string };
+        if (stopped) return;
+        if (payload.status === "paid") {
+          setPayMessage("支付已确认，正在生成报告");
+          window.setTimeout(onPaid, 300);
+        }
+      } catch {
+        if (!stopped) setPayMessage("正在确认支付结果");
+      }
+    }
+
+    checkStatus();
+    const timer = window.setInterval(checkStatus, 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [orderId, onPaid, payState]);
+
+  async function handlePay() {
+    const mode = resolvePaymentMode();
+    setPayMode(mode);
+    setPayMessage("");
+    setNativeQr("");
+
+    if (mode === "jsapi" && !isWechatBrowser()) {
+      setPayState("error");
+      setPayMessage("请在手机微信内打开页面完成支付。");
+      return;
+    }
+
+    const openid = mode === "jsapi" ? getWechatOpenid() : "";
+    if (mode === "jsapi" && !openid) {
+      setPayState("error");
+      setPayMessage("JSAPI 支付需要微信网页授权 openid，服务号配置完成后由后端授权注入。");
+      return;
+    }
+
+    try {
+      setPayState("creating");
+      const response = await fetch("/api/pay/wechat/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          mode,
+          openid: openid || undefined,
+          resultType: type,
+          score: numberValue(form.total),
+          gender: form.gender || undefined
+        })
+      });
+      const payload = (await response.json()) as NativePaymentResponse | JsapiPaymentResponse | PaymentErrorResponse;
+
+      if (!response.ok) {
+        const errorPayload = payload as PaymentErrorResponse;
+        setPayState(errorPayload.error === "WECHAT_PAY_NOT_CONFIGURED" ? "not_configured" : "error");
+        if (errorPayload.missing?.length) {
+          console.warn("微信支付配置未完成", errorPayload.missing);
+        }
+        setPayMessage(
+          errorPayload.error === "WECHAT_PAY_NOT_CONFIGURED" ? "支付通道配置中，暂时无法发起支付。" : errorPayload.message
+        );
+        return;
+      }
+
+      const successPayload = payload as NativePaymentResponse | JsapiPaymentResponse;
+      if (successPayload.mode === "native") {
+        const qrDataUrl = await QRCode.toDataURL(successPayload.codeUrl, {
+          errorCorrectionLevel: "M",
+          margin: 1,
+          width: 220,
+          color: {
+            dark: "#171021",
+            light: "#ffffff"
+          }
+        });
+        setOrderId(successPayload.orderId);
+        setNativeQr(qrDataUrl);
+        setPayState("waiting");
+        setPayMessage("请使用微信扫码支付，完成后自动生成报告。");
+        return;
+      }
+
+      setOrderId(successPayload.orderId);
+      await invokeWechatPay(successPayload.jsapiParams);
+      setPayState("waiting");
+      setPayMessage("支付完成后正在确认订单状态。");
+    } catch (error) {
+      setPayState("error");
+      setPayMessage(error instanceof Error ? error.message : "微信支付创建失败，请稍后重试。");
+    }
+  }
+
+  const payModeLabel = payMode === "jsapi" ? "微信内支付" : "微信扫码支付";
+  const buttonLabel = payState === "creating" ? "正在创建订单" : "立即微信支付";
 
   return (
     <main className="checkout-layout page-enter">
       <section className="checkout-preview">
         <div className="section-kicker">
           <LockKeyhole size={16} />
-          报告预览已生成
+          人格档案已锁定
         </div>
-        <h1>解锁完整报告</h1>
+        <h1>解锁完整志愿人格报告</h1>
         <p className="lead">
-          系统已完成48题人格校准。支付后生成 AI 专业建议，包含人格解读、专业 Top 榜和志愿行动清单。
+          你已完成 48 道情境题。支付后生成完整报告，包含人格画像、专业方向、风险提醒和行动建议。
         </p>
         <div className="blur-report">
           <Image src="/images/checkout-unlock.png" alt="报告解锁插画" width={760} height={560} />
           <div className="locked-chip">
             <LockKeyhole size={16} />
-            核心建议待解锁
+            关键人格结论待解锁
           </div>
         </div>
       </section>
       <aside className="payment-panel">
         <div className="mini-result">
-          <span>已识别人格轮廓</span>
+          <span>已识别人格倾向</span>
           <strong>{type} · {typeTitles[type]}</strong>
-          <p>完整解释和专业建议将在支付后生成。</p>
+          <p>完整报告会说明你的决策偏好与适合优先关注的专业方向。</p>
         </div>
         <div className="pay-box">
           <div>
-            <span>报告解锁价</span>
+            <span>完整报告解锁价</span>
             <strong>¥ 9.90</strong>
           </div>
-          <p>当前为前端演示支付，后续可接微信支付 / 支付宝回调。</p>
+          <p>一次解锁，支付后立即生成完整报告。</p>
         </div>
-        <button className="pay-method active">
+        <div className="pay-method active" aria-label="当前支付方式">
           <Wallet size={18} />
-          微信支付
-        </button>
-        <button className="pay-method">
-          <CreditCard size={18} />
-          支付宝
-        </button>
-        <button className="primary-button full" onClick={onPay}>
-          支付后生成 AI 专业建议
-          <ArrowRight size={18} />
+          {payModeLabel}
+        </div>
+        {nativeQr ? (
+          <div className="native-qr-box" aria-label="微信支付二维码">
+            <img className="native-qr" src={nativeQr} alt="微信扫码支付二维码" />
+            <span>微信扫码支付</span>
+          </div>
+        ) : null}
+        {payMessage ? (
+          <p className={`payment-alert ${payState}`}>
+            {payMessage}
+          </p>
+        ) : null}
+        <button className="primary-button full" disabled={payState === "creating"} onClick={handlePay}>
+          {buttonLabel}
+          {payState === "creating" ? <LoaderCircle className="spin" size={18} /> : <ArrowRight size={18} />}
         </button>
         <button className="ghost-button full" onClick={onBack}>
           返回修改答案
@@ -652,15 +906,15 @@ function CheckoutStep({
 }
 
 function GeneratingStep({ progress }: { progress: number }) {
-  const stages = ["人格参数校准中", "正在读取学科属性", "正在匹配专业宇宙坐标", "正在生成志愿建议"];
+  const stages = ["正在整理测评结果", "正在生成性格画像", "正在匹配专业方向", "正在生成志愿行动建议"];
   const activeStage = Math.min(stages.length - 1, Math.floor(progress / 28));
 
   return (
     <main className="generating-layout page-enter">
       <section className="generating-card">
         <LoaderCircle className="spin" size={36} />
-        <h1>AI 报告生成中</h1>
-        <p>通常需要10-30秒。当前演示会快速生成一份完整报告。</p>
+        <h1>完整报告生成中</h1>
+        <p>请稍候，完整报告正在生成。</p>
         <div className="progress-track large">
           <i style={{ width: `${progress}%` }} />
         </div>
@@ -740,21 +994,22 @@ function ReportStep({ form, scores, onRestart }: { form: ScoreForm; scores: Scor
   const type = resultType(scores);
   const persona = personaData[type];
   const title = persona.title;
-  const image = personaImage(type, form.gender);
-  const sortedMajors = [...majors].sort((a, b) => b.fit - a.fit);
+  const selectedGender = form.gender || "male";
+  const image = personaImage(type, selectedGender);
+  const sortedDirectionIdeas = [...directionIdeas].sort((a, b) => b.fit - a.fit);
 
   return (
     <main className="report-layout page-enter">
       <section className="report-hero">
-        <Image src="/images/report-header.png" alt="AI专业报告插画" width={1100} height={680} />
+        <Image src="/images/report-header.png" alt="志愿人格报告插画" width={1100} height={680} />
         <div className="report-hero-content">
           <div className="section-kicker">
             <Radar size={16} />
-            完整报告
+            完整志愿人格报告
           </div>
           <h1>{type} {title}</h1>
           <p>
-            你的测试结果更像“有脑洞但不乱飞，能把兴趣和现实慢慢拼起来”的路线。下面是基于成绩、选科和人格分数生成的专业建议。
+            根据你的情境题选择，报告从性格倾向、决策方式和专业方向三个层面给出参考。
           </p>
           <div className="persona-quote">
             <Sparkles size={16} />
@@ -769,11 +1024,11 @@ function ReportStep({ form, scores, onRestart }: { form: ScoreForm; scores: Scor
           </div>
         </div>
         <aside className="result-character-card" aria-label={`${type} ${title} 角色卡`}>
-          <Image src={image} alt={`${type} ${title} ${genderLabels[form.gender]}二次元角色卡`} width={760} height={1100} />
+          <Image src={image} alt={`${type} ${title} ${genderLabels[selectedGender]}版二次元角色卡`} width={760} height={1100} />
           <div className="character-card-caption">
             <span>{type}</span>
             <strong>{title}</strong>
-            <em>{persona.vibe} · {genderLabels[form.gender]}</em>
+            <em>{persona.vibe} · {genderLabels[selectedGender]}版</em>
           </div>
         </aside>
       </section>
@@ -791,15 +1046,14 @@ function ReportStep({ form, scores, onRestart }: { form: ScoreForm; scores: Scor
         <article className="report-card">
           <div className="card-title">
             <BookOpen size={18} />
-            学科属性
+            高考总分
           </div>
           <div className="score-summary">
-            <strong>{form.total} 分</strong>
-            <span>{form.province} · {form.track}</span>
-            <span>位次 {form.rank || "待补充"}</span>
+            <strong>{form.total || "--"} 分</strong>
+            <span>你填写的分数</span>
           </div>
           <p>
-            数学和外语分数表现更亮，适合优先查看需要逻辑建模、信息检索和长期自学能力的专业。位次越准确，后续真实志愿推荐越稳定。
+            分数用于辅助理解志愿范围，具体填报仍需结合省份、位次和招生计划。
           </p>
         </article>
       </section>
@@ -809,20 +1063,20 @@ function ReportStep({ form, scores, onRestart }: { form: ScoreForm; scores: Scor
           <div>
             <div className="section-kicker">
               <Sparkles size={16} />
-              16型人格图鉴
+              16型人格倾向
             </div>
-            <h2>每一种结果都有自己的角色卡</h2>
+            <h2>每一种结果对应不同的选择偏好</h2>
           </div>
-          <span className="subtle-badge">当前命中：{type} {title} · {genderLabels[form.gender]}</span>
+          <span className="subtle-badge">当前结果：{type} {title} · {genderLabels[selectedGender]}</span>
         </div>
         <div className="persona-gallery">
           {personaOrder.map((personaType) => {
             const item = personaData[personaType];
-            const itemImage = personaImage(personaType, form.gender);
+            const itemImage = personaImage(personaType, selectedGender);
             const active = personaType === type;
             return (
               <article className={active ? "persona-card active" : "persona-card"} key={personaType}>
-                <Image src={itemImage} alt={`${personaType} ${item.title} ${genderLabels[form.gender]}角色卡`} width={360} height={520} />
+                <Image src={itemImage} alt={`${personaType} ${item.title} ${genderLabels[selectedGender]}版角色卡`} width={360} height={520} />
                 <div>
                   <span>{personaType}</span>
                   <strong>{item.title}</strong>
@@ -837,32 +1091,32 @@ function ReportStep({ form, scores, onRestart }: { form: ScoreForm; scores: Scor
         <div className="section-heading">
           <div>
             <div className="section-kicker">
-              <School size={16} />
-              专业推荐 Top 10
+              <Sparkles size={16} />
+              专业方向参考
             </div>
-            <h2>推荐先从这些专业开始查培养方案</h2>
+            <h2>优先关注这些方向</h2>
           </div>
-          <span className="subtle-badge">匹配度由前端演示算法生成</span>
+          <span className="subtle-badge">仅供参考，最终以招生计划和个人意愿为准</span>
         </div>
         <div className="major-list">
-          {sortedMajors.map((major, index) => (
-            <article className="major-card" key={major.name}>
+          {sortedDirectionIdeas.map((idea, index) => (
+            <article className="major-card" key={idea.name}>
               <div className="major-rank">{String(index + 1).padStart(2, "0")}</div>
               <div className="major-main">
                 <div className="major-title-row">
-                  <h3>{major.name}</h3>
-                  <span>匹配度 {major.fit}%</span>
+                  <h3>{idea.name}</h3>
+                  <span>匹配度 {idea.fit}%</span>
                 </div>
-                <p>{major.why}</p>
+                <p>{idea.why}</p>
                 <div className="tag-row">
-                  {major.tags.map((tag) => (
+                  {idea.tags.map((tag) => (
                     <span key={tag}>{tag}</span>
                   ))}
                 </div>
               </div>
               <div className="risk-box">
-                <strong>需要确认</strong>
-                <span>{major.risk}</span>
+                <strong>注意点</strong>
+                <span>{idea.risk}</span>
               </div>
             </article>
           ))}
@@ -876,17 +1130,17 @@ function ReportStep({ form, scores, onRestart }: { form: ScoreForm; scores: Scor
             志愿行动清单
           </div>
           <ol>
-            <li>用真实位次对比近三年录取线，不只看总分。</li>
-            <li>打开目标学校培养方案，确认课程是否符合预期。</li>
-            <li>把城市、专业、就业方向分开比较，不要混成一个感觉。</li>
-            <li>和家长沟通时用“备选方案 + 风险说明”，别只用热爱硬冲。</li>
+            <li>先核对本省一分一段表，确认分数对应位次。</li>
+            <li>把专业方向分成优先、备选和谨慎三类。</li>
+            <li>对比近三年录取位次，不只看最低分。</li>
+            <li>结合课程内容、就业路径和个人兴趣再做最终判断。</li>
           </ol>
         </article>
         <article className="share-card">
           <Image src="/images/share-poster-bg.png" alt="分享海报背景预览" width={520} height={760} />
           <div>
             <strong>{title}</strong>
-            <span>分享页只展示人格称号，完整专业建议保留在报告内。</span>
+            <span>分享页只展示人格类型，完整专业方向保留在报告内。</span>
           </div>
         </article>
       </section>
@@ -901,29 +1155,44 @@ export default function Home() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [generationProgress, setGenerationProgress] = useState(0);
 
-  const scores = useMemo(() => calculateScores(answers), [answers]);
+  const currentQuestions = useMemo(
+    () => (form.gender ? questionSets[form.gender] : questionSets.male),
+    [form.gender]
+  );
+  const scores = useMemo(() => calculateScores(answers, currentQuestions), [answers, currentQuestions]);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("soul-major-demo");
+    const saved = window.localStorage.getItem(STORAGE_KEY);
     if (!saved) return;
     try {
       const parsed = JSON.parse(saved) as {
+        version?: number;
         form?: Partial<ScoreForm>;
         answers?: Record<string, string>;
         currentIndex?: number;
       };
-      if (parsed.form) setForm({ ...initialForm, ...parsed.form, gender: parsed.form.gender ?? "neutral" });
+      if (parsed.version !== STORAGE_VERSION) {
+        window.localStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+      if (parsed.form) {
+        setForm({
+          gender: safeGender(parsed.form.gender),
+          total: parsed.form.total ?? initialForm.total
+        });
+      }
       if (parsed.answers) setAnswers(parsed.answers);
       if (typeof parsed.currentIndex === "number") setCurrentIndex(parsed.currentIndex);
     } catch {
-      window.localStorage.removeItem("soul-major-demo");
+      window.localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
 
   useEffect(() => {
     window.localStorage.setItem(
-      "soul-major-demo",
+      STORAGE_KEY,
       JSON.stringify({
+        version: STORAGE_VERSION,
         form,
         answers,
         currentIndex
@@ -953,9 +1222,17 @@ export default function Home() {
 
   function handleAnswer(questionId: string, optionId: string) {
     setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
-    if (currentIndex < questions.length - 1) {
-      window.setTimeout(() => setCurrentIndex((index) => Math.min(questions.length - 1, index + 1)), 160);
+    if (currentIndex < currentQuestions.length - 1) {
+      window.setTimeout(() => setCurrentIndex((index) => Math.min(currentQuestions.length - 1, index + 1)), 160);
     }
+  }
+
+  function updateForm(nextForm: ScoreForm) {
+    if (nextForm.gender !== form.gender) {
+      setAnswers({});
+      setCurrentIndex(0);
+    }
+    setForm(nextForm);
   }
 
   function restart() {
@@ -966,12 +1243,12 @@ export default function Home() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell app-shell-${step}`}>
       <AppHeader step={step} onHome={() => setStep("home")} />
 
       {step === "home" ? (
         <main className="home-layout page-enter">
-          <ScoreInput form={form} setForm={setForm} onStart={() => setStep("intro")} />
+          <ScoreInput form={form} setForm={updateForm} onStart={() => setStep("intro")} />
           <AttributePanel form={form} />
         </main>
       ) : null}
@@ -982,6 +1259,7 @@ export default function Home() {
 
       {step === "quiz" ? (
         <QuizStep
+          questions={currentQuestions}
           answers={answers}
           currentIndex={currentIndex}
           setCurrentIndex={setCurrentIndex}
@@ -991,7 +1269,7 @@ export default function Home() {
       ) : null}
 
       {step === "checkout" ? (
-        <CheckoutStep scores={scores} onBack={() => setStep("quiz")} onPay={() => setStep("generating")} />
+        <CheckoutStep form={form} scores={scores} onBack={() => setStep("quiz")} onPaid={() => setStep("generating")} />
       ) : null}
 
       {step === "generating" ? <GeneratingStep progress={generationProgress} /> : null}
