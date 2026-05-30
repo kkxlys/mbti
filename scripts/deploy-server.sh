@@ -41,6 +41,13 @@ if [ "${missing_wechat}" -eq 1 ]; then
   echo "Warning: Wechat Pay is not fully configured. Payment button will show channel unavailable."
 fi
 
+missing_wechat_oauth=0
+grep -q "^WECHAT_MP_APP_SECRET=." .env.production || missing_wechat_oauth=1
+grep -q "^WECHAT_OAUTH_SESSION_SECRET=." .env.production || missing_wechat_oauth=1
+if [ "${missing_wechat_oauth}" -eq 1 ]; then
+  echo "Warning: Wechat OAuth is not fully configured. JSAPI payment in WeChat cannot get openid yet."
+fi
+
 echo "Building and starting Docker service..."
 docker compose up -d --build
 

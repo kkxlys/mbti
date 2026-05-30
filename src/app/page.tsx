@@ -81,6 +81,11 @@ type PaymentErrorResponse = {
   missing?: string[];
 };
 
+type WechatOpenidState = {
+  openid: string;
+  hasSession: boolean;
+};
+
 declare global {
   interface Window {
     WeixinJSBridge?: {
@@ -358,7 +363,7 @@ function resolvePaymentMode(): PaymentMode {
   return isMobileBrowser() ? "jsapi" : "native";
 }
 
-function getWechatOpenid() {
+function getStoredWechatOpenid() {
   if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
   const queryOpenid = params.get("openid")?.trim();
@@ -371,6 +376,43 @@ function getWechatOpenid() {
   if (injectedOpenid) return injectedOpenid;
 
   return window.sessionStorage.getItem("wechat_openid")?.trim() ?? "";
+}
+
+async function resolveWechatOpenid(): Promise<WechatOpenidState> {
+  const storedOpenid = getStoredWechatOpenid();
+  if (storedOpenid) return { openid: storedOpenid, hasSession: true };
+
+  try {
+    const response = await fetch("/api/wechat/oauth/session", {
+      cache: "no-store"
+    });
+    const payload = (await response.json()) as { hasOpenid?: boolean };
+    return {
+      openid: "",
+      hasSession: Boolean(payload.hasOpenid)
+    };
+  } catch {
+    return { openid: "", hasSession: false };
+  }
+}
+
+function startWechatOauth() {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem("wechat_oauth_after", "checkout");
+  window.sessionStorage.setItem("wechat_oauth_resume_pay", "1");
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  window.location.assign(`/api/wechat/oauth/start?returnTo=${encodeURIComponent(returnTo)}`);
+}
+
+function wechatOauthErrorMessage(code: string) {
+  const messages: Record<string, string> = {
+    not_configured: "微信支付授权还未配置完成，请稍后再试。",
+    state_invalid: "微信授权校验失败，请重新发起支付。",
+    state_failed: "微信授权初始化失败，请重新发起支付。",
+    code_missing: "微信授权未完成，请重新发起支付。",
+    OPENID_MISSING: "微信授权未返回身份信息，请重新发起支付。"
+  };
+  return messages[code] ?? "微信授权失败，请重新发起支付。";
 }
 
 function invokeWechatPay(params: JsapiBridgeParams) {
@@ -740,6 +782,25 @@ function CheckoutStep({
   }, []);
 
   useEffect(() => {
+    const oauthError = window.sessionStorage.getItem("wechat_oauth_error");
+    if (oauthError) {
+      window.sessionStorage.removeItem("wechat_oauth_error");
+      window.sessionStorage.removeItem("wechat_oauth_resume_pay");
+      setPayState("error");
+      setPayMessage(wechatOauthErrorMessage(oauthError));
+      return;
+    }
+
+    if (window.sessionStorage.getItem("wechat_oauth_resume_pay") !== "1") return;
+    window.sessionStorage.removeItem("wechat_oauth_resume_pay");
+    const timer = window.setTimeout(() => {
+      void handlePay();
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     if (payState !== "waiting" || !orderId) return;
 
     let stopped = false;
@@ -779,10 +840,11 @@ function CheckoutStep({
       return;
     }
 
-    const openid = mode === "jsapi" ? getWechatOpenid() : "";
-    if (mode === "jsapi" && !openid) {
-      setPayState("error");
-      setPayMessage("JSAPI 支付需要微信网页授权 openid，服务号配置完成后由后端授权注入。");
+    const openidState = mode === "jsapi" ? await resolveWechatOpenid() : { openid: "", hasSession: false };
+    if (mode === "jsapi" && !openidState.openid && !openidState.hasSession) {
+      setPayState("creating");
+      setPayMessage("正在获取微信支付授权...");
+      startWechatOauth();
       return;
     }
 
@@ -795,7 +857,7 @@ function CheckoutStep({
         },
         body: JSON.stringify({
           mode,
-          openid: openid || undefined,
+          openid: openidState.openid || undefined,
           resultType: type,
           score: numberValue(form.total),
           gender: form.gender || undefined
@@ -1186,6 +1248,27 @@ export default function Home() {
     } catch {
       window.localStorage.removeItem(STORAGE_KEY);
     }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthResult = params.get("wechat_oauth");
+    if (!oauthResult) return;
+
+    if (window.sessionStorage.getItem("wechat_oauth_after") === "checkout") {
+      window.sessionStorage.removeItem("wechat_oauth_after");
+      setStep("checkout");
+    }
+
+    const oauthError = params.get("wechat_oauth_error");
+    if (oauthError) {
+      window.sessionStorage.setItem("wechat_oauth_error", oauthError);
+    }
+
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete("wechat_oauth");
+    cleanUrl.searchParams.delete("wechat_oauth_error");
+    window.history.replaceState(null, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
   }, []);
 
   useEffect(() => {

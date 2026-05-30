@@ -1,7 +1,8 @@
 import { randomBytes } from "crypto";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createOrder, type PaymentMode } from "../../../../../lib/orders";
 import { upsertUserFromOrder } from "../../../../../lib/users";
+import { readWechatOpenidCookie, WECHAT_OPENID_COOKIE_NAME } from "../../../../../lib/wechat-oauth";
 import {
   createWechatPrepay,
   getReportPriceCents,
@@ -29,7 +30,7 @@ function normalizeMode(value: unknown): PaymentMode | null {
   return value === "jsapi" || value === "native" ? value : null;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const status = getWechatPayConfigStatus();
     if (!status.configured) {
@@ -49,11 +50,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "INVALID_PAYMENT_MODE", message: "支付方式不正确" }, { status: 400 });
     }
 
-    if (mode === "jsapi" && !body.openid) {
+    const requestOpenid = typeof body.openid === "string" ? body.openid.trim() : "";
+    const cookieOpenid = readWechatOpenidCookie(request.cookies.get(WECHAT_OPENID_COOKIE_NAME)?.value);
+    const openid = mode === "jsapi" ? requestOpenid || cookieOpenid : requestOpenid;
+
+    if (mode === "jsapi" && !openid) {
       return NextResponse.json(
         {
           error: "OPENID_REQUIRED",
-          message: "JSAPI 支付需要微信网页授权 openid"
+          message: "请在微信内完成支付授权"
         },
         { status: 400 }
       );
@@ -66,20 +71,20 @@ export async function POST(request: Request) {
       outTradeNo,
       amountCents,
       description: "高考志愿人格报告",
-      payerOpenid: body.openid
+      payerOpenid: openid
     });
 
     createOrder({
       outTradeNo,
       amountCents,
       mode,
-      openid: body.openid,
+      openid,
       resultType: body.resultType,
       score: body.score,
       gender: body.gender
     });
     upsertUserFromOrder({
-      openid: body.openid,
+      openid,
       resultType: body.resultType,
       score: body.score,
       gender: body.gender
