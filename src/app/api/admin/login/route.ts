@@ -4,6 +4,7 @@ import {
   clearAdminLoginFailures,
   createAdminCookie,
   createAdminSessionToken,
+  getAdminPublicOrigin,
   getClientIp,
   isAdminAuthConfigured,
   isSameOriginRequest,
@@ -15,7 +16,7 @@ import {
 export const runtime = "nodejs";
 
 function redirectTo(request: Request, path: string) {
-  return NextResponse.redirect(new URL(path, request.url), { status: 303 });
+  return NextResponse.redirect(new URL(path, getAdminPublicOrigin(request)), { status: 303 });
 }
 
 export async function POST(request: Request) {

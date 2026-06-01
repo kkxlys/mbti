@@ -62,6 +62,35 @@ function shouldUseSecureAdminCookie() {
   return process.env.NODE_ENV === "production";
 }
 
+function normalizeOrigin(value?: string | null) {
+  if (!value) return "";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+function getConfiguredAdminOrigin() {
+  return (
+    normalizeOrigin(process.env.ADMIN_SITE_URL) ||
+    normalizeOrigin(process.env.WECHAT_SITE_URL) ||
+    normalizeOrigin(process.env.NEXT_PUBLIC_SITE_URL)
+  );
+}
+
+export function getAdminPublicOrigin(request: Request) {
+  const configured = getConfiguredAdminOrigin();
+  if (configured) return configured;
+
+  const requestUrl = new URL(request.url);
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || request.headers.get("host")?.trim() || requestUrl.host;
+  const protocol = forwardedProto || requestUrl.protocol.replace(":", "");
+  return `${protocol}://${host}`;
+}
+
 export function isAdminAuthConfigured() {
   const missing: string[] = [];
   if (getAdminUsername().length < MIN_USERNAME_LENGTH) missing.push("ADMIN_USERNAME");
@@ -202,5 +231,17 @@ export function clearAdminLoginFailures(key: string) {
 export function isSameOriginRequest(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin) return false;
-  return origin === new URL(request.url).origin;
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) return false;
+
+  const allowedOrigins = new Set<string>();
+  const publicOrigin = normalizeOrigin(getAdminPublicOrigin(request));
+  if (publicOrigin) allowedOrigins.add(publicOrigin);
+
+  const requestOrigin = normalizeOrigin(new URL(request.url).origin);
+  if (requestOrigin && !requestOrigin.includes("0.0.0.0")) {
+    allowedOrigins.add(requestOrigin);
+  }
+
+  return allowedOrigins.has(normalizedOrigin);
 }
